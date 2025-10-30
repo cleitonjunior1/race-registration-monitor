@@ -1,0 +1,69 @@
+name: Monitor race registrations
+
+on:
+  schedule:
+    - cron: "0 */24 * * *"  # roda a cada 6 horas (UTC)
+  workflow_dispatch:        # permite rodar manualmente
+
+permissions:
+  contents: write           # para commitar status.json
+
+env:
+  YEAR: "2026"              # usado no assunto do e-mail
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run monitor
+        id: monitor
+        run: |
+          python monitor.py
+
+      - name: Prepare mail body and subject (if any)
+        id: alert
+        if: hashFiles('alert.md') != ''
+        run: |
+          echo "text<<EOF" >> "$GITHUB_OUTPUT"
+          cat alert.md >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          # monta lista de eventos para o assunto
+          echo "SUBJECT_SITES=$(grep '^## ' alert.md | sed 's/^## //; s/ - .*//' | paste -sd ', ' -)" >> "$GITHUB_ENV"
+
+      - name: Send email
+        if: hashFiles('alert.md') != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "⚠️ Inscrições abertas ${YEAR}: ${{ env.SUBJECT_SITES }}"
+          to: "cleitonjunior1@gmail.com"
+          from: "GitHub Actions <${{ secrets.SMTP_USERNAME }}>"
+          content_type: text/plain
+          body: ${{ steps.alert.outputs.text }}
+
+      - name: Commit status.json (persistir estado)
+        run: |
+          if ! git diff --quiet -- status.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add status.json
+            git commit -m "chore: update notification status $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
+``
