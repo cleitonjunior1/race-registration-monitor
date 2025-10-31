@@ -2,14 +2,13 @@ name: Monitor race registrations
 
 on:
   schedule:
-    - cron: "0 */24 * * *"  # roda a cada 6 horas (UTC)
-  workflow_dispatch:        # permite rodar manualmente
-
+    - cron: "0 */6 * * *"   # roda a cada 6 horas (UTC)
+  workflow_dispatch:         # permite rodar manualmente pela UI
 permissions:
-  contents: write           # para commitar status.json
+  contents: write            # para commitar status.json
 
 env:
-  YEAR: "2026"              # usado no assunto do e-mail
+  YEAR: "2025"               # usado no assunto do e-mail
 
 jobs:
   check:
@@ -33,37 +32,44 @@ jobs:
         run: |
           python monitor.py
 
+      # Só cria variáveis para e-mail se o arquivo alert.md existir
       - name: Prepare mail body and subject (if any)
         id: alert
-        if: hashFiles('alert.md') != ''
+        if: ${{ hashFiles('alert.md') != '' }}
+        shell: bash
         run: |
-          echo "text<<EOF" >> "$GITHUB_OUTPUT"
-          cat alert.md >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          # monta lista de eventos para o assunto
-          echo "SUBJECT_SITES=$(grep '^## ' alert.md | sed 's/^## //; s/ - .*//' | paste -sd ', ' -)" >> "$GITHUB_ENV"
+          {
+            echo "text<<EOF"
+            cat alert.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # Extrai os nomes dos eventos para compor o assunto do e-mail
+          SUBJECT_SITES=$(grep '^## ' alert.md | sed 's/^## //; s/ - .*//' | paste -sd ', ' -)
+          echo "SUBJECT_SITES=$SUBJECT_SITES" >> "$GITHUB_ENV"
 
       - name: Send email
-        if: hashFiles('alert.md') != ''
+        if: ${{ hashFiles('alert.md') != '' }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "⚠️ Inscrições abertas ${YEAR}: ${{ env.SUBJECT_SITES }}"
+          subject: "⚠️ Inscrições abertas ${{ env.YEAR }}: ${{ env.SUBJECT_SITES }}"
           to: "cleitonjunior1@gmail.com"
           from: "GitHub Actions <${{ secrets.SMTP_USERNAME }}>"
           content_type: text/plain
           body: ${{ steps.alert.outputs.text }}
 
       - name: Commit status.json (persistir estado)
+        shell: bash
         run: |
-          if ! git diff --quiet -- status.json; then
+          if ! git diff --quiet -- status.json 2>/dev/null; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add status.json
             git commit -m "chore: update notification status $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             git push
+          else
+            echo "Nenhuma mudança em status.json; nada para commitar."
           fi
-``
