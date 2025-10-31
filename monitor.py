@@ -2,21 +2,23 @@
 # -*- coding: utf-8 -*-
 """
 Monitora páginas oficiais da Maratón de Mendoza e Patagonian International Marathon
-e envia sinal para o workflow disparar e-mail quando detectar inscrições de 2026 abertas.
+e gera um alerta quando detectar inscrições de 2026 abertas.
 
-Lógica:
+Fluxo:
 - Baixa HTML das páginas.
-- Procura 2026 + termos de inscrição e bloqueia se tiver termos de fechamento.
-- Confere se há links típicos de inscrição (ex.: Eventick/Registration).
-- Persiste status em status.json para não enviar e-mail repetido.
+- Procura "2026" + termos de inscrição e bloqueia se tiver termos de fechamento.
+- Confere se há links típicos de inscrição (ex.: Eventick/Registration/WeTravel).
+- Persiste estado em status.json para não enviar e-mail repetido.
 - Gera alert.md quando houver novidade (o workflow usa como corpo do e-mail).
 """
 
-import json, os, re, sys, time
+import json
+import os
+import re
+import time
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
-
 import requests
 from bs4 import BeautifulSoup
 
@@ -27,8 +29,9 @@ TIMEOUT = 20
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; GH-RegistrationsBot/1.0; +https://github.com/)",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8,pt-BR;q=0.7"
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8,pt-BR;q=0.7",
 }
+
 
 @dataclass
 class Target:
@@ -38,7 +41,8 @@ class Target:
     positive_keywords: List[str]
     negative_keywords: List[str]
     require_year: bool = True
-    must_have_link_patterns: Optional[List[str]] = None  # regex dos hrefs de inscrição
+    must_have_link_patterns: Optional[List[str]] = None  # regex para hrefs de inscrição
+
 
 TARGETS: List[Target] = [
     Target(
@@ -50,17 +54,34 @@ TARGETS: List[Target] = [
             "https://maratondemendoza.com/2025/",
         ],
         positive_keywords=[
-            "inscripción", "inscripciones", "inscribite", "registro", "regístrese",
-            "register", "registration", "tickets", "venta", "comprar"
+            "inscripción",
+            "inscripciones",
+            "inscribite",
+            "registro",
+            "regístrese",
+            "register",
+            "registration",
+            "tickets",
+            "venta",
+            "comprar",
         ],
         negative_keywords=[
-            "cerradas", "cerrada", "agotadas", "sold out", "closed",
-            "finalizó", "fechadas", "encerradas"
+            "cerradas",
+            "cerrada",
+            "agotadas",
+            "sold out",
+            "closed",
+            "finalizó",
+            "fechadas",
+            "encerradas",
         ],
         must_have_link_patterns=[
             r"eventick\.com\.ar",
-            r"/inscripcion", r"/inscripciones", r"/register", r"/registration"
-        ]
+            r"/inscripcion",
+            r"/inscripciones",
+            r"/register",
+            r"/registration",
+        ],
     ),
     Target(
         id="patagonia",
@@ -68,20 +89,37 @@ TARGETS: List[Target] = [
         urls=[
             "https://www.patagonianinternationalmarathon.com/en/registration",
             "https://www.patagonianinternationalmarathon.com/en/calendar",
-            "https://www.patagonianinternationalmarathon.com/en/"
+            "https://www.patagonianinternationalmarathon.com/en/",
         ],
         positive_keywords=[
-            "registration", "register", "inscripción", "inscripciones",
-            "inscreva-se", "super pre-sale", "pre-sale", "preventa", "venta", "tickets"
+            "registration",
+            "register",
+            "inscripción",
+            "inscripciones",
+            "inscreva-se",
+            "super pre-sale",
+            "pre-sale",
+            "preventa",
+            "venta",
+            "tickets",
         ],
         negative_keywords=[
-            "has closed", "closed", "cerradas", "cerrada", "fechadas", "sold out"
+            "has closed",
+            "closed",
+            "cerradas",
+            "cerrada",
+            "fechadas",
+            "sold out",
         ],
         must_have_link_patterns=[
-            r"/en/registration", r"/registration", r"wetravel\.", r"/register"
-        ]
+            r"/en/registration",
+            r"/registration",
+            r"wetravel\.",
+            r"/register",
+        ],
     ),
 ]
+
 
 def load_state() -> Dict[str, Dict]:
     if os.path.exists(STATE_FILE):
@@ -90,11 +128,14 @@ def load_state() -> Dict[str, Dict]:
                 return json.load(f)
         except Exception:
             pass
+    # Estado inicial: ninguém foi notificado ainda
     return {t.id: {"notified_years": []} for t in TARGETS}
+
 
 def save_state(state: Dict[str, Dict]):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+
 
 def fetch(url: str) -> Optional[str]:
     try:
@@ -102,8 +143,9 @@ def fetch(url: str) -> Optional[str]:
         if r.status_code == 200 and r.text:
             return r.text
     except requests.RequestException:
-        pass
+        return None
     return None
+
 
 def text_has_open_signals(text: str, target: Target, year: str) -> bool:
     t = text.lower()
@@ -115,6 +157,7 @@ def text_has_open_signals(text: str, target: Target, year: str) -> bool:
         return False
     return True
 
+
 def links_have_patterns(soup: BeautifulSoup, patterns: List[str]) -> bool:
     hrefs = [a.get("href") for a in soup.find_all("a", href=True)]
     for pat in patterns:
@@ -122,6 +165,7 @@ def links_have_patterns(soup: BeautifulSoup, patterns: List[str]) -> bool:
         if any(h and rx.search(h) for h in hrefs):
             return True
     return False
+
 
 def analyze_target(target: Target, year: str) -> Optional[Dict]:
     for url in target.urls:
@@ -131,11 +175,14 @@ def analyze_target(target: Target, year: str) -> Optional[Dict]:
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(separator=" ", strip=True)
         if text_has_open_signals(text, target, year):
-            if target.must_have_link_patterns and not links_have_patterns(soup, target.must_have_link_patterns):
-                # Ainda não há link típico de inscrição
+            if target.must_have_link_patterns and not links_have_patterns(
+                soup, target.must_have_link_patterns
+            ):
+                # Sinais positivos, mas sem link típico de inscrição — aguardar
                 continue
             return {"url": url, "ts": int(time.time())}
     return None
+
 
 def main():
     state = load_state()
@@ -161,7 +208,7 @@ def main():
                 f"- Ano: **{YEAR}**",
                 f"- Página analisada: `{host}`",
                 f"- Critérios: termos de abertura + {YEAR} e link de inscrição presente",
-                ""
+                "",
             ]
         with open(ALERT_FILE, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
@@ -169,6 +216,6 @@ def main():
     else:
         print("[INFO] Nada aberto ainda.")
 
+
 if __name__ == "__main__":
     main()
-``
